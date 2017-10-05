@@ -27,6 +27,7 @@ TODO:
 * keep a revision history
 * keep track of page references or interlinking
 * add export options mentioned in `/config/files`
+* new default theme
 
 ## Installing
 
@@ -41,7 +42,7 @@ If your `$GOPATH/bin` is in your `PATH`, you can simply:
 ```
 $ gowiki
 Running in deployment mode with bundled resources.
-Listening on :2222
+Listening on localhost:2222
 ```
 
 `GOWIKI_PORT` controls the port to run on and `GOWIKI_PATH` controls the destination of the sqlite database.
@@ -71,6 +72,7 @@ Usage of ./gowiki:
   -debug=false: run with debug mode
   -del-static=false: delete db-cached static files
   -load-static=false: reload db-cached static files
+  -hostname="localhost": host to run on
   -port="2222": port to run on
 ```
 

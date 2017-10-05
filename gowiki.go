@@ -3,19 +3,14 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha1"
 	"database/sql"
 	"encoding/base64"
-	"errors"
 	"flag"
 	"fmt"
-	"regexp"
-	//"github.com/davecgh/go-spew/spew"
-	"io"
 	"log"
 	"net/http"
 	"os"
-	"strconv"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,7 +68,7 @@ func MustParse(path string) *mandira.Template {
 		t, err = mandira.ParseFile(path)
 	}
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("path: ", path, err)
 	}
 	return t
 }
@@ -89,6 +84,7 @@ func environ(key, fallback string) string {
 }
 
 var opts struct {
+	hostname   string
 	db         string
 	port       string
 	debug      bool
@@ -97,6 +93,7 @@ var opts struct {
 }
 
 func main() {
+	flag.StringVar(&opts.hostname, "hostname", environ("GOWIKI_HOSTNAME", "localhost"), "hostname to run on")
 	flag.StringVar(&opts.port, "port", environ("GOWIKI_PORT", "2222"), "port to run on")
 	flag.StringVar(&opts.db, "db", environ("GOWIKI_PATH", "./wiki.db"), "path for wiki db")
 	flag.BoolVar(&opts.debug, "debug", len(os.Getenv("GOWIKI_DEVELOP")) > 0, "run with debug mode")
@@ -176,314 +173,14 @@ func main() {
 
 	handler := handlers.LoggingHandler(os.Stdout, r)
 	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		now := time.Now().UTC()
-		ts := now.Format(time.RFC1123)
-		ts = strings.Replace(ts, "UTC", "GMT", 1)
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		w.Header().Set("Server", "gowiki")
 		w.Header().Set("Date", ts)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		handler.ServeHTTP(w, req)
 	}))
-	fmt.Println("Listening on :" + opts.port)
-	log.Fatal(http.ListenAndServe(":"+opts.port, nil))
-}
-
-func abort(w http.ResponseWriter, status int, body []byte) {
-	w.WriteHeader(status)
-	w.Write(body)
-}
-
-// Handles all non-sepcial wiki pages.
-func wikipage(w http.ResponseWriter, req *http.Request) {
-	var err error
-	page := Page{}
-	page.Url = "/" + req.URL.Query().Get(":url")
-	err = dbm.Get(&page, page.Url)
-	if err != nil {
-		w.Write([]byte(t("pagedne.mnd").RenderInLayout(t("base.mnd"), M{"page": page})))
-		return
-	}
-	fromlinks := make([]Crosslink, 0, 10)
-	tolinks := make([]Crosslink, 0, 10)
-	db.Select(&fromlinks, "SELECT * FROM crosslink WHERE `from`=?", page.Url)
-	db.Select(&tolinks, "SELECT * FROM crosslink WHERE `to`=?", page.Url)
-	w.Write([]byte(t("page.mnd").RenderInLayout(t("base.mnd"), M{
-		"page": page,
-		"PageInfo": M{
-			"from": fromlinks,
-			"to":   tolinks,
-		},
-	})))
-}
-
-func listUsers(w http.ResponseWriter, req *http.Request) {
-	users := []*User{}
-	db.Select(&users, "SELECT * FROM user")
-	c := t("user.mnd").Render(M{
-		"users":  users,
-		"config": cfg,
-	})
-	s := t("base.mnd").Render(M{"content": c})
-	w.Write([]byte(s))
-}
-
-func createUser(w http.ResponseWriter, req *http.Request) {
-	var err error
-	user := &User{}
-
-	if !cfg.AllowSignups {
-		http.Redirect(w, req, "/", 301)
-		return
-	}
-
-	if req.Method == "POST" {
-		req.ParseForm()
-		decoder.Decode(user, req.PostForm)
-		user.Password = sha1hash(user.Password)
-		u := &User{}
-		err = db.Get(u, "SELECT * FROM user WHERE email=?", user.Email)
-		if err == nil {
-			err = errors.New("User with that email already exists.")
-		} else {
-			err = dbm.Insert(user)
-		}
-		if err == nil {
-			http.Redirect(w, req, "/users", 303)
-			return
-		}
-	}
-
-	s := t("usercreate.mnd").RenderInLayout(t("base.mnd"), M{
-		"error":  err,
-		"user":   user,
-		"config": cfg,
-	})
-	w.Write([]byte(s))
-}
-
-func showUser(w http.ResponseWriter, req *http.Request) {
-	idstr := req.URL.Query().Get(":id")
-	id, err := strconv.Atoi(idstr)
-	if err != nil {
-		fmt.Println(err)
-		http.Redirect(w, req, "/users", 301)
-		return
-	}
-	user := &User{}
-	err = dbm.Get(user, id)
-	if err != nil {
-		fmt.Println(err)
-		http.Redirect(w, req, "/users", 301)
-		return
-	}
-	pages := []*Page{}
-	db.Select(&pages, "SELECT * FROM page WHERE ownedby=?", user.Id)
-	w.Write([]byte(t("usershow.mnd").RenderInLayout(t("base.mnd"), M{
-		"user":  user,
-		"pages": pages,
-	})))
-}
-
-func sha1hash(password string) string {
-	sha := sha1.New()
-	io.WriteString(sha, password)
-	return fmt.Sprintf("%x", sha.Sum(nil))
-}
-
-func login(w http.ResponseWriter, req *http.Request) {
-	var err error
-	user := User{}
-	if req.Method == "POST" {
-		req.ParseForm()
-		decoder.Decode(&user, req.PostForm)
-		hash := sha1hash(user.Password)
-		err = db.Get(&user, "SELECT * FROM user WHERE email=? AND password=?", user.Email, hash)
-		if err == nil {
-			session, _ := cookies.Get(req, "gowiki-session")
-			session.Values["authenticated"] = true
-			session.Values["userid"] = user.Id
-			session.Save(req, w)
-			http.Redirect(w, req, "/", 303)
-			return
-		}
-	}
-
-	if err == sql.ErrNoRows {
-		err = errors.New("Email or Password incorrect.")
-	}
-
-	w.Write([]byte(t("login.mnd").RenderInLayout(t("base.mnd"), M{
-		"user":   user,
-		"error":  err,
-		"config": cfg,
-	})))
-}
-
-func currentuser(req *http.Request) *User {
-	session, _ := cookies.Get(req, "gowiki-session")
-	if session.Values["authenticated"] != true {
-		return nil
-	}
-	u := &User{}
-	err := dbm.Get(u, session.Values["userid"])
-	if err != nil {
-		return nil
-	}
-	return u
-}
-
-func logout(w http.ResponseWriter, req *http.Request) {
-	session, _ := cookies.Get(req, "gowiki-session")
-	session.Values["authenticated"] = false
-	delete(session.Values, "userid")
-	session.Save(req, w)
-	http.Redirect(w, req, "/", 302)
-}
-
-func listPages(w http.ResponseWriter, req *http.Request) {
-	pages := []*Page{}
-	db.Select(&pages, "SELECT * FROM page")
-	w.Write([]byte(t("listpages.mnd").RenderInLayout(t("base.mnd"), M{"pages": pages})))
-}
-
-func checkbox(req *http.Request, key string) bool {
-	if v, ok := req.PostForm[key]; ok && len(v) > 0 {
-		return true
-	}
-	return false
-}
-
-func editPage(w http.ResponseWriter, req *http.Request) {
-	var err error
-	canEdit := true
-	user := currentuser(req)
-	page := &Page{}
-	page.Url = req.URL.Query().Get(":url")
-	err = dbm.Get(page, page.Url)
-	if err == nil && page.Locked && (user == nil || int(page.OwnedBy.Int64) != user.Id) {
-		canEdit = false
-	}
-	if user == nil && !cfg.AllowAnonEdits {
-		canEdit = false
-		err = nil
-	}
-	if req.Method == "POST" && canEdit {
-		req.ParseForm()
-		decoder.Decode(page, req.PostForm)
-		// gorilla doesn't really handle the boolean/checkbox here well
-		page.Locked = checkbox(req, "Locked")
-		if page.Locked {
-			page.OwnedBy.Int64 = int64(user.Id)
-			page.OwnedBy.Valid = true
-		} else {
-			page.OwnedBy.Valid = false
-		}
-		page.Render()
-		if err == nil {
-			page.UpdateCrosslinks()
-			_, err = dbm.Update(page)
-		} else {
-			err = dbm.Insert(page)
-			if err != nil {
-				page.UpdateCrosslinks()
-			}
-		}
-	} else {
-		err = dbm.Get(page, page.Url)
-	}
-	owner := User{}
-	if !canEdit && user != nil && page.OwnedBy.Int64 > 0 {
-		dbm.Get(&owner, page.OwnedBy)
-	}
-
-	if err == sql.ErrNoRows {
-		err = nil
-	}
-
-	w.Write([]byte(t("editpage.mnd").RenderInLayout(t("base.mnd"), M{
-		"page":    page,
-		"error":   err,
-		"user":    user,
-		"owner":   owner,
-		"config":  cfg,
-		"canEdit": canEdit,
-	})))
-}
-
-func configWiki(w http.ResponseWriter, req *http.Request) {
-	//var err error
-	canEdit := true
-	user := currentuser(req)
-	if user == nil {
-		canEdit = false
-	}
-	if !cfg.AllowConfigure && canEdit && user.Id != 1 {
-		canEdit = false
-	}
-	if req.Method == "POST" && canEdit {
-		req.ParseForm()
-		cfg.AllowAnonEdits = checkbox(req, "AllowAnonEdits")
-		cfg.AllowSignups = checkbox(req, "AllowSignups")
-		cfg.AllowConfigure = checkbox(req, "AllowConfigure")
-		cfg.Save()
-	}
-
-	w.Write([]byte(t("config.mnd").RenderInLayout(t("base.mnd"), M{
-		"user":    user,
-		"config":  cfg,
-		"canEdit": canEdit,
-	})))
-}
-
-func listFiles(w http.ResponseWriter, req *http.Request) {
-	files := make([]*File, 0, 10)
-	db.Select(&files, "SELECT * FROM file")
-	w.Write([]byte(t("listfiles.mnd").RenderInLayout(t("base.mnd"), M{
-		"files": files,
-	})))
-}
-
-func editFile(w http.ResponseWriter, req *http.Request) {
-	var err error
-
-	canEdit := true
-	user := currentuser(req)
-	if user == nil {
-		canEdit = false
-	}
-	if !cfg.AllowConfigure && canEdit && user.Id != 1 {
-		canEdit = false
-	}
-
-	path := req.URL.Query().Get(":path")
-	file := &File{}
-	dbm.Get(file, path)
-	if req.Method == "POST" && canEdit {
-		req.ParseForm()
-		decoder.Decode(file, req.PostForm)
-		_, err = dbm.Update(file)
-		/* if that update went well, update the in-memory bundle to that content */
-		if err == nil {
-			_bundle[file.Path] = file.Content
-		}
-	}
-
-	w.Write([]byte(t("editfile.mnd").RenderInLayout(t("base.mnd"), M{
-		"file":    file,
-		"canEdit": canEdit,
-		"config":  cfg,
-		"error":   err,
-	})))
-
-}
-
-func bundleStatic(w http.ResponseWriter, req *http.Request) {
-	f, ok := _bundle[strings.TrimLeft(req.URL.Path, "/")]
-	if ok {
-		w.Write([]byte(f))
-	} else {
-		http.NotFound(w, req)
-	}
+	fmt.Println("Listening on " + opts.hostname + ":" + opts.port)
+	log.Fatal(http.ListenAndServe(opts.hostname+":"+opts.port, nil))
 }
 
 // add back execl because it's been removed from sqlx for a long time
@@ -511,6 +208,7 @@ type Page struct {
 	Title    string
 	Locked   bool
 	OwnedBy  sql.NullInt64
+	Modified string
 	Links    []string `db:"-"`
 }
 
@@ -677,9 +375,10 @@ func bootstrap() {
 	err := db.Get(index, "SELECT * FROM page WHERE url=?", "/")
 	if err != nil {
 		index := &Page{
-			Content: _bundle["static/default.md"],
-			Title:   "Welcome to Gowiki",
-			Url:     "/",
+			Content:  _bundle["static/default.md"],
+			Title:    "Welcome to Gowiki",
+			Url:      "/",
+			Modified: time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		index.Render()
 		dbm.Insert(index)

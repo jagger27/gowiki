@@ -9,13 +9,13 @@ body {
 
 h1,h2,h3,h4,h5,h6 { color: #222; font-weight: bold; }
 b, strong { color: #111; }
-a { color: #00f; }
-a:visited { color: #808; }
-a:hover { color: #00a; }
+a { color: #3474FD; }
+a:visited { color: #4134FD; }
+a:hover { color: #70A0FF; }
 abbr { border-bottom: 1px dotted #aaa; }
 #content { width: 800px; margin: 2em auto; position: relative; }
 pre { border: 1px solid #e1e1e8; border-radius: 4px; font-family: "Consolas", "Monaco", monospace; background-color: #f7f7f9; padding: 2px 5px; color: #000; overflow: auto; }
-code { font-size: 14px; font-weight: bold; color: #000; background-color: #f7f7f9; display: inline-block; }
+code { font-family: "Consolas", "Monaco", monospace; font-size: 14px; color: #000; background-color: #f7f7f9; display: inline-block; }
 
 pre code { font-weight: normal; color: #48484c; padding: 8px;}
 
@@ -102,15 +102,15 @@ ol.linenums li {
   line-height: 18px;
   text-shadow: 0 1px 0 #fff;
 }
-#page-info-toggle-container {
+#page-meta-controls {
     text-align: right;
     position: absolute;
     top: 5px;
     right: 5px;
     z-index: 100;
+    font-size: 14px;
 }
 #page-info-toggle {
-    font-size: 14px;
 }
 #page-info {
     position: relative;
@@ -118,7 +118,7 @@ ol.linenums li {
     display: none;
     font-size: 16px;
     border-radius: 8px;
-    padding: 0 10px;
+    padding: 5px 10px;
     background-color: #f8f8f8;
 }
 
