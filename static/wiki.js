@@ -39,4 +39,10 @@ $(function() {
         e.preventDefault();
         $("#page-info").toggle();
     });
+
+    if (window.location.pathname.startsWith("/pages/edit/")) {
+        window.onbeforeunload = function() {
+            return true;
+        };
+    }
 });

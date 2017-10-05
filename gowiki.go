@@ -3,21 +3,20 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha1"
 	"database/sql"
 	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
-	"regexp"
-	//"github.com/davecgh/go-spew/spew"
-	"io"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dustin/go-humanize"
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/pat"
@@ -28,6 +27,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/shurcooL/github_flavored_markdown"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -73,7 +73,7 @@ func MustParse(path string) *mandira.Template {
 		t, err = mandira.ParseFile(path)
 	}
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("path: ", path, err)
 	}
 	return t
 }
@@ -89,6 +89,7 @@ func environ(key, fallback string) string {
 }
 
 var opts struct {
+	hostname   string
 	db         string
 	port       string
 	debug      bool
@@ -97,6 +98,7 @@ var opts struct {
 }
 
 func main() {
+	flag.StringVar(&opts.hostname, "hostname", environ("GOWIKI_HOSTNAME", "localhost"), "hostname to run on")
 	flag.StringVar(&opts.port, "port", environ("GOWIKI_PORT", "2222"), "port to run on")
 	flag.StringVar(&opts.db, "db", environ("GOWIKI_PATH", "./wiki.db"), "path for wiki db")
 	flag.BoolVar(&opts.debug, "debug", len(os.Getenv("GOWIKI_DEVELOP")) > 0, "run with debug mode")
@@ -176,16 +178,14 @@ func main() {
 
 	handler := handlers.LoggingHandler(os.Stdout, r)
 	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		now := time.Now().UTC()
-		ts := now.Format(time.RFC1123)
-		ts = strings.Replace(ts, "UTC", "GMT", 1)
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		w.Header().Set("Server", "gowiki")
 		w.Header().Set("Date", ts)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		handler.ServeHTTP(w, req)
 	}))
-	fmt.Println("Listening on :" + opts.port)
-	log.Fatal(http.ListenAndServe(":"+opts.port, nil))
+	fmt.Println("Listening on " + opts.hostname + ":" + opts.port)
+	log.Fatal(http.ListenAndServe(opts.hostname+":"+opts.port, nil))
 }
 
 func abort(w http.ResponseWriter, status int, body []byte) {
@@ -207,11 +207,13 @@ func wikipage(w http.ResponseWriter, req *http.Request) {
 	tolinks := make([]Crosslink, 0, 10)
 	db.Select(&fromlinks, "SELECT * FROM crosslink WHERE `from`=?", page.Url)
 	db.Select(&tolinks, "SELECT * FROM crosslink WHERE `to`=?", page.Url)
+	modtime, err := time.Parse(time.RFC3339Nano, page.Modified)
 	w.Write([]byte(t("page.mnd").RenderInLayout(t("base.mnd"), M{
 		"page": page,
 		"PageInfo": M{
-			"from": fromlinks,
-			"to":   tolinks,
+			"modified": humanize.Time(modtime),
+			"from":     fromlinks,
+			"to":       tolinks,
 		},
 	})))
 }
@@ -239,7 +241,12 @@ func createUser(w http.ResponseWriter, req *http.Request) {
 	if req.Method == "POST" {
 		req.ParseForm()
 		decoder.Decode(user, req.PostForm)
-		user.Password = sha1hash(user.Password)
+		hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("bcrypt: %s", err), 500)
+			log.Fatal(err)
+		}
+		user.Password = string(hash)
 		u := &User{}
 		err = db.Get(u, "SELECT * FROM user WHERE email=?", user.Email)
 		if err == nil {
@@ -284,21 +291,17 @@ func showUser(w http.ResponseWriter, req *http.Request) {
 	})))
 }
 
-func sha1hash(password string) string {
-	sha := sha1.New()
-	io.WriteString(sha, password)
-	return fmt.Sprintf("%x", sha.Sum(nil))
-}
-
 func login(w http.ResponseWriter, req *http.Request) {
 	var err error
+	login := User{}
 	user := User{}
 	if req.Method == "POST" {
 		req.ParseForm()
-		decoder.Decode(&user, req.PostForm)
-		hash := sha1hash(user.Password)
-		err = db.Get(&user, "SELECT * FROM user WHERE email=? AND password=?", user.Email, hash)
-		if err == nil {
+		decoder.Decode(&login, req.PostForm)
+
+		err = db.Get(&user, "SELECT * FROM user WHERE email=?", login.Email)
+		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(login.Password))
+		if err != nil {
 			session, _ := cookies.Get(req, "gowiki-session")
 			session.Values["authenticated"] = true
 			session.Values["userid"] = user.Id
@@ -306,10 +309,9 @@ func login(w http.ResponseWriter, req *http.Request) {
 			http.Redirect(w, req, "/", 303)
 			return
 		}
-	}
-
-	if err == sql.ErrNoRows {
-		err = errors.New("Email or Password incorrect.")
+		if err != nil {
+			err = errors.New("Email or Password incorrect.")
+		}
 	}
 
 	w.Write([]byte(t("login.mnd").RenderInLayout(t("base.mnd"), M{
@@ -378,6 +380,7 @@ func editPage(w http.ResponseWriter, req *http.Request) {
 		} else {
 			page.OwnedBy.Valid = false
 		}
+		page.Modified = time.Now().UTC().Format(time.RFC3339Nano)
 		page.Render()
 		if err == nil {
 			page.UpdateCrosslinks()
@@ -511,6 +514,7 @@ type Page struct {
 	Title    string
 	Locked   bool
 	OwnedBy  sql.NullInt64
+	Modified string
 	Links    []string `db:"-"`
 }
 
@@ -677,9 +681,10 @@ func bootstrap() {
 	err := db.Get(index, "SELECT * FROM page WHERE url=?", "/")
 	if err != nil {
 		index := &Page{
-			Content: _bundle["static/default.md"],
-			Title:   "Welcome to Gowiki",
-			Url:     "/",
+			Content:  _bundle["static/default.md"],
+			Title:    "Welcome to Gowiki",
+			Url:      "/",
+			Modified: time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		index.Render()
 		dbm.Insert(index)

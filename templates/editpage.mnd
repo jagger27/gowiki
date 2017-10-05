@@ -1,5 +1,5 @@
 {{#page}}
-<h1>Edit <tt>{{Url}}</tt></h1>
+<h1>Edit <tt><a id="edit-page-url" href="{{Url}}">{{Url}}</a></tt></h1>
 
 {{#config}}
 {{?if not user and not AllowAnonEdits }}

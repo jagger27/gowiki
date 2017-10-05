@@ -1,18 +1,22 @@
 <html>
     <head>
         <link rel="stylesheet" media="screen" href="/static/style.css">
-        <link href='http://fonts.googleapis.com/css?family=Lato:400,700' rel='stylesheet' type='text/css'>
-        <script src="/static/jquery.js"></script>
+        <script src="/static/jquery.min.js"></script>
         <script src="/static/prettify.js"></script>
         <script src="/static/wiki.js"></script>
     </head>
     <body onload="prettyPrint();">
         <div id="content">
         {{?if PageInfo }}
-            <div id="page-info-toggle-container"><a id="page-info-toggle" href="#">page info</a></div>
+            <div id="page-meta-controls">
+                <a id="page-info-toggle" href="#">page info</a>
+                {{#page}}
+                <a href="/pages/edit{{Url}}">edit</a>
+                {{/page}}
+            </div>
             <div id="page-info">
                 {{#PageInfo}}
-                    <div class="fromlinks">
+                    <!--<div class="fromlinks">
                         <h4>Pages this page links to:</h4>
                         <ul>
                         {{#from}}
@@ -27,7 +31,8 @@
                             <li><a href="{{From}}">{{From}}</a></li>
                         {{/to}}
                         </ul>
-                    </div>
+                    </div>-->
+                    <small>Last modified {{modified}}.</small>
                 {{/PageInfo}}
             </div>
         {{/if}}
